@@ -238,7 +238,7 @@ const CONSTANTS = { pi: Math.PI, e: Math.E, tau: Math.TAU || 2 * Math.PI };
 // Tokenizer
 function tokenise(expr) {
   const tokens = [];
-  const re = /\s*(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|[a-zA-Z_][a-zA-Z0-9_]*|[-+*/%()^!]|\.)/g;
+  const re = /\s*(\d+(?:\.\d*)?(?:[eE][+-]?\d+)?|[a-zA-Z_][a-zA-Z0-9_]*|\*\*|\/\/|[+\-*\/%()^!]|\.)/g;
   let m, prevWasValue = false;
   while ((m = re.exec(expr)) !== null) {
     const raw = m[1];
@@ -278,12 +278,9 @@ function tokenise(expr) {
         tokens.push({ kind: '*', text: '*' });
       }
       const kind = ops[raw] || raw;
-      tokens.push({ kind, text: raw });
+      const pushKind = raw === '^' ? 'POW' : kind;
+      tokens.push({ kind: pushKind, text: raw });
       prevWasValue = raw === ')' || raw === '!';
-      // Exponentiation
-      if (raw === '^') {
-        tokens[tokens.length-1] = { kind: 'POW', text: '^' };
-      }
     }
   }
   return tokens;
@@ -317,7 +314,7 @@ class Parser {
   }
   expr(minPrec = 0) {
     let t = this.advance();
-    let left;
+    let left, right;
     // Prefix
     if (t.kind === 'NUM') {
       left = t.value;
@@ -350,10 +347,10 @@ class Parser {
         right = this.expr(PREC['POW'] - 1);
         left = Math.pow(left, right);
       } else if (next.kind === '//') {
-        const right = this.expr(PREC['//']);
+        right = this.expr(PREC['//']);
         left = Math.floor(left / right);
       } else {
-        const right = this.expr(prec);
+        right = this.expr(prec);
         switch (next.kind) {
           case '+': left += right; break;
           case '-': left -= right; break;
@@ -380,6 +377,24 @@ function evaluate(expr) {
   const result = parser.expr(0);
   if (parser.peek() !== null) throw new Error('表达式后有多余内容');
   return result;
+}
+
+function isIncomplete(expr) {
+  // Expression is incomplete if it ends with an operator or open paren
+  if (/[+\-*\/%(^]\s*$/.test(expr)) return true;
+  if (expr.endsWith('**')) return true;
+  // Check for unclosed parentheses
+  const opens = (expr.match(/\(/g) || []).length;
+  const closes = (expr.match(/\)/g) || []).length;
+  if (opens > closes) return true;
+  return false;
+}
+
+function fmt(v) {
+  if (!isFinite(v)) return v > 0 ? '∞' : '-∞';
+  if (Number.isInteger(v) && Math.abs(v) < 1e15) return v.toString();
+  const s = v.toPrecision(12);
+  return parseFloat(s).toString();
 }
 
 // ── UI ──────────────────────────────────────────────────────────
@@ -414,17 +429,14 @@ function calc() {
     lastResult = result;
     display(input, fmt(result), false);
   } catch (e) {
-    display(input, `错误: ${e.message}`, true);
-    lastResult = null;
+    // Incomplete expression (trailing operator etc.) -> show gracefully
+    if (isIncomplete(input)) {
+      display(input, lastResult !== null ? fmt(lastResult) : '', false);
+    } else {
+      display(input, `错误: ${e.message}`, true);
+      lastResult = null;
+    }
   }
-}
-
-function fmt(v) {
-  if (!isFinite(v)) return v > 0 ? '∞' : '-∞';
-  if (Number.isInteger(v) && Math.abs(v) < 1e15) return v.toString();
-  const s = v.toPrecision(12);
-  // Remove trailing zeros
-  return parseFloat(s).toString();
 }
 
 function append(text) {
@@ -479,12 +491,7 @@ document.querySelectorAll('.btn').forEach(btn => {
       calc();
 
     } else if (action === 'unary') {
-      // Toggle negative of current number
-      if (input === '') {
-        append('-');
-      } else {
-        append('-');
-      }
+      append('-');
       calc();
 
     } else if (action === 'postfix') {
